@@ -56,7 +56,7 @@ for cluster in range(3):
 
 plt.tight_layout()
 plt.savefig('clusters_visualization.png', dpi=300)
-print("\n✅ Visualização salva em 'clusters_visualization.png'")
+print("\n Visualização salva em 'clusters_visualization.png'")
 
 # Matriz de confusão
 from sklearn.metrics import confusion_matrix
@@ -71,6 +71,6 @@ plt.title('Matriz de Confusão')
 plt.ylabel('Cluster Real')
 plt.xlabel('Cluster Predito')
 plt.savefig('confusion_matrix.png', dpi=300)
-print("✅ Matriz de confusão salva em 'confusion_matrix.png'")
+print("Matriz de confusão salva em 'confusion_matrix.png'")
 
 plt.show()
