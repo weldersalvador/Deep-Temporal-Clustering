@@ -486,7 +486,8 @@ if __name__ == "__main__":
         os.makedirs(args.save_dir)
 
     # Load data
-    (X_train, y_train), (X_val, y_val) = load_data(args.dataset)
+    (X_train, y_train), (X_val, y_val) = load_data('CBF')
+    X_val, y_val = None,None
 
     # Find number of clusters
     if args.n_clusters is None:
