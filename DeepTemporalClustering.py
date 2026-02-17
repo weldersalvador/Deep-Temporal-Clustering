@@ -120,10 +120,10 @@ class DTC:
                                outputs=[self.autoencoder.output, clustering_layer])
 
     @property
+    @property
     def cluster_centers_(self):
-        """
-        Returns cluster centers
-        """
+        if self.kmeans is not None:
+            return self.kmeans.cluster_centers_
         return self.model.get_layer(name='TSClustering').get_weights()[0]
 
     @staticmethod
@@ -316,137 +316,55 @@ class DTC:
 
     def fit(self, X_train, y_train=None,
             X_val=None, y_val=None,
-            epochs=100,
-            eval_epochs=10,
-            save_epochs=10,
-            batch_size=64,
-            tol=0.001,
-            patience=5,
-            finetune_heatmap_at_epoch=8,
+            n_clusters=2,
             save_dir='results/tmp'):
-        """
-        Training procedure
 
-        # Arguments
-           X_train: training set
-           y_train: (optional) training labels
-           X_val: (optional) validation set
-           y_val: (optional) validation labels
-           epochs: number of training epochs
-           eval_epochs: evaluate metrics on train/val set every eval_epochs epochs
-           save_epochs: save model weights every save_epochs epochs
-           batch_size: training batch size
-           tol: tolerance for stopping criterion
-           patience: patience for stopping criterion
-           finetune_heatmap_at_epoch: epoch number where heatmap finetuning will start. Heatmap loss weight will
-                                      switch from `self.initial_heatmap_loss_weight` to `self.final_heatmap_loss_weight`
-           save_dir: path to existing directory where weights and logs are saved
-        """
         if not self.pretrained:
             print('Autoencoder was not pre-trained!')
 
-        if self.heatmap:
-            self.finetune_heatmap_at_epoch = finetune_heatmap_at_epoch
+        print('Extraindo do características do espaço latente: ')
+        z_train = self.encoder.predict(X_train)
+        z_train_flat = z_train.reshape(z_train.shape[0], -1)
 
-        # Logging file
-        logfile = open(save_dir + '/dtc_log.csv', 'w')
-        fieldnames = ['epoch', 'T', 'L', 'Lr', 'Lc']
-        if X_val is not None:
-            fieldnames += ['L_val', 'Lr_val', 'Lc_val']
-        if y_train is not None:
-            fieldnames += ['acc', 'pur', 'nmi', 'ari']
-        if y_val is not None:
-            fieldnames += ['acc_val', 'pur_val', 'nmi_val', 'ari_val']
-        logwriter = csv.DictWriter(logfile, fieldnames)
+        print(f'Treinando Kmeans com {n_clusters} clusters...')
+        self.kmeans = KMeans(n_clusters=n_clusters, n_init=20)
+        y_pred = self.kmeans.fit_predict(z_train_flat)
+
+        logfile = open(save_dir + '/kmeans_log.csv', 'w')
+        fieldnames = ['split', 'acc', 'pur', 'nmi', 'ari']
+        logwriter = csv.DictWriter(logfile, fieldnames=fieldnames)
         logwriter.writeheader()
 
-        y_pred_last = None
-        patience_cnt = 0
+        if y_train is not None:
+            logdict = {
+                'split': 'train',
+                'acc': cluster_acc(y_train, y_pred),
+                'pur': cluster_purity(y_train, y_pred),
+                'nmi': metrics.normalized_mutual_info_score(y_train, y_pred),
+                'ari': metrics.adjusted_rand_score(y_train, y_pred),
+            }
+            logwriter.writerow(logdict)
+            print('[Train] Acc={acc:.4f}, Pur={pur:.4f}, NMI={nmi:.4f}, ARI={ari:.4f}'.format(**logdict))
 
-        print('Training for {} epochs.\nEvaluating every {} and saving model every {} epochs.'.format(epochs, eval_epochs, save_epochs))
+        if X_val is not None:
+            z_val = self.encoder.predict(X_val)
+            z_val_flat = z_val.reshape(z_val.shape[0], -1)  # achatar também
+            y_val_pred = self.kmeans.predict(z_val_flat)
 
-        for epoch in range(epochs):
-
-            # Compute cluster assignments for training set
-            q = self.model.predict(X_train)[1]
-            p = DTC.target_distribution(q)
-
-            # Evaluate losses and metrics on training set
-            if epoch % eval_epochs == 0:
-
-                # Initialize log dictionary
-                logdict = dict(epoch=epoch)
-
-                y_pred = q.argmax(axis=1)
-                if X_val is not None:
-                    q_val = self.model.predict(X_val)[1]
-                    p_val = DTC.target_distribution(q_val)
-                    y_val_pred = q_val.argmax(axis=1)
-
-                print('epoch {}'.format(epoch))
-                if self.heatmap:
-                    loss = self.model.evaluate(X_train, [X_train, p, p], batch_size=batch_size, verbose=False)
-                else:
-                    loss = self.model.evaluate(X_train, [X_train, p], batch_size=batch_size, verbose=False)
-                logdict['L'] = loss[0]
-                logdict['Lr'] = loss[1]
-                logdict['Lc'] = loss[2]
-                print('[Train] - Lr={:f}, Lc={:f} - total loss={:f}'.format(logdict['Lr'], logdict['Lc'], logdict['L']))
-                if X_val is not None:
-                    val_loss = self.model.evaluate(X_val, [X_val, p_val], batch_size=batch_size, verbose=False)
-                    logdict['L_val'] = val_loss[0]
-                    logdict['Lr_val'] = val_loss[1]
-                    logdict['Lc_val'] = val_loss[2]
-                    print('[Val] - Lr={:f}, Lc={:f} - total loss={:f}'.format(logdict['Lr_val'], logdict['Lc_val'], logdict['L_val']))
-
-                # Evaluate the clustering performance using labels
-                if y_train is not None:
-                    logdict['acc'] = cluster_acc(y_train, y_pred)
-                    logdict['pur'] = cluster_purity(y_train, y_pred)
-                    logdict['nmi'] = metrics.normalized_mutual_info_score(y_train, y_pred)
-                    logdict['ari'] = metrics.adjusted_rand_score(y_train, y_pred)
-                    print('[Train] - Acc={:f}, Pur={:f}, NMI={:f}, ARI={:f}'.format(logdict['acc'], logdict['pur'],
-                                                                                    logdict['nmi'], logdict['ari']))
-                if y_val is not None:
-                    logdict['acc_val'] = cluster_acc(y_val, y_val_pred)
-                    logdict['pur_val'] = cluster_purity(y_val, y_val_pred)
-                    logdict['nmi_val'] = metrics.normalized_mutual_info_score(y_val, y_val_pred)
-                    logdict['ari_val'] = metrics.adjusted_rand_score(y_val, y_val_pred)
-                    print('[Val] - Acc={:f}, Pur={:f}, NMI={:f}, ARI={:f}'.format(logdict['acc_val'], logdict['pur_val'],
-                                                                                  logdict['nmi_val'], logdict['ari_val']))
-
+            if y_val is not None:
+                logdict = {
+                    'split': 'val',
+                    'acc': cluster_acc(y_val, y_val_pred),
+                    'pur': cluster_purity(y_val, y_val_pred),
+                    'nmi': metrics.normalized_mutual_info_score(y_val, y_val_pred),
+                    'ari': metrics.adjusted_rand_score(y_val, y_val_pred),
+                }
                 logwriter.writerow(logdict)
+                print('[Val]   Acc={acc:.4f}, Pur={pur:.4f}, NMI={nmi:.4f}, ARI={ari:.4f}'.format(**logdict))
 
-                # check stop criterion
-                if y_pred_last is not None:
-                    assignment_changes = np.sum(y_pred != y_pred_last).astype(np.float32) / y_pred.shape[0]
-                y_pred_last = y_pred
-                if epoch > 0 and assignment_changes < tol:
-                    patience_cnt += 1
-                    print('Assignment changes {} < {} tolerance threshold. Patience: {}/{}.'.format(assignment_changes, tol, patience_cnt, patience))
-                    if patience_cnt >= patience:
-                        print('Reached max patience. Stopping training.')
-                        logfile.close()
-                        break
-                else:
-                    patience_cnt = 0
-
-            # Save intermediate model and plots
-            if epoch % save_epochs == 0:
-                self.model.save_weights(save_dir + '/DTC_model_' + str(epoch) + '.weights.h5')
-                print('Saved model to:', save_dir + '/DTC_model_' + str(epoch) + '.h5')
-
-            # Train for one epoch
-            if self.heatmap:
-                self.model.fit(X_train, [X_train, p, p], epochs=1, batch_size=batch_size, verbose=False)
-                self.on_epoch_end(epoch)
-            else:
-                self.model.fit(X_train, [X_train, p], epochs=1, batch_size=batch_size, verbose=False)
-
-        # Save the final model
         logfile.close()
-        print('Saving model to:', save_dir + '/DTC_model_final.weights.h5')
-        self.model.save_weights(save_dir + '/DTC_model_final.weights.h5')
+        print('Done.')
+        return y_pred
 
 
 if __name__ == "__main__":
@@ -530,15 +448,17 @@ if __name__ == "__main__":
 
     # Fit model
     t0 = time()
-    dtc.fit(X_train, y_train, X_val, y_val, args.epochs, args.eval_epochs, args.save_epochs, args.batch_size,
-            args.tol, args.patience, args.finetune_heatmap_at_epoch, args.save_dir)
+    dtc.fit(X_train, y_train, X_val, y_val,
+        n_clusters=args.n_clusters,
+        save_dir=args.save_dir)
     print('Training time: ', (time() - t0))
 
     # Evaluate
+    # Evaluate
     print('Performance (TRAIN)')
     results = {}
-    q = dtc.model.predict(X_train)[1]
-    y_pred = q.argmax(axis=1)
+    z = dtc.encoder.predict(X_train).reshape(X_train.shape[0], -1)  # achatar
+    y_pred = dtc.kmeans.predict(z)                                   # usar self.kmeans
     if y_train is not None:
         results['acc'] = cluster_acc(y_train, y_pred)
         results['pur'] = cluster_purity(y_train, y_pred)
