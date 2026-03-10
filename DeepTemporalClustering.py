@@ -316,13 +316,16 @@ class DTC:
 
     def fit(self, X_train, y_train=None,
             X_val=None, y_val=None,
-            n_clusters=2,
+            n_clusters=None,
             save_dir='results/tmp'):
 
         if not self.pretrained:
             print('Autoencoder was not pre-trained!')
 
-        print('Extraindo do características do espaço latente: ')
+        if self.n_clusters == None:
+            print("Number of cluster has not been specified")
+            return;
+
         z_train = self.encoder.predict(X_train)
         z_train_flat = z_train.reshape(z_train.shape[0], -1)
 
@@ -348,7 +351,7 @@ class DTC:
 
         if X_val is not None:
             z_val = self.encoder.predict(X_val)
-            z_val_flat = z_val.reshape(z_val.shape[0], -1)  # achatar também
+            z_val_flat = z_val.reshape(z_val.shape[0], -1) 
             y_val_pred = self.kmeans.predict(z_val_flat)
 
             if y_val is not None:
